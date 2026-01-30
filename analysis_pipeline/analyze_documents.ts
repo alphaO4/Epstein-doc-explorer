@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 
-// Please note: this method uses the agents SDK and assume you are already locally authenticated via claude code via a MAX plan.
-// Running this with the API rather than the max plan will cost about $50 for the 2000 epstein emails
-import { query } from '@anthropic-ai/claude-agent-sdk';
+// This script uses a configurable LLM backend for document analysis.
+// Configure via environment variables:
+//   LLM_PROVIDER: 'local' | 'openrouter' | 'openai' | 'anthropic' (default: 'local')
+//   LLM_BASE_URL: API endpoint (default: 'http://localhost:11434/v1' for Ollama)
+//   LLM_MODEL: Model name (default depends on provider)
+//   LLM_API_KEY: API key if required
+import { query, getModelName, printConfig, extractJSON } from './llm_client.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-
-// Model configuration
-const ANALYSIS_MODEL = 'claude-haiku-4-5'; // Fast and cost-effective for document analysis
 
 interface RDFTriple {
   timestamp?: string; // ISO format YYYY-MM-DDTHH:MM or date YYYY-MM-DD
@@ -248,35 +249,21 @@ If the document is too fragmentary or unreadable to analyze, still provide your 
   console.log(`Analyzing ${docId}...`);
 
   let result = '';
-  let usageStats = null;
+  let usageStats: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number } | null = null;
   let agentCostUSD = 0;
 
-  const agent = query({
-    prompt: analysisPrompt,
-    options: {
-      model: ANALYSIS_MODEL,
-      maxTokens: 16000,
-      maxTurns: 5,
-      allowedTools: [],
-    }
-  });
-
   try {
-    for await (const message of agent) {
-      if (message.type === 'result' && message.subtype === 'success') {
-        result = message.result;
-        if (message.usage) {
-          usageStats = message.usage;
-        }
-        if (message.total_cost_usd !== undefined) {
-          agentCostUSD = message.total_cost_usd;
-        }
-      } else if (message.type === 'assistant') {
-        const textBlocks = message.message.content.filter((c: any) => c.type === 'text');
-        for (const block of textBlocks) {
-          result += block.text;
-        }
-      }
+    const response = await query(analysisPrompt, {
+      maxTokens: 16000,
+    });
+
+    result = response.content;
+
+    if (response.usage) {
+      usageStats = {
+        input_tokens: response.usage.inputTokens,
+        output_tokens: response.usage.outputTokens,
+      };
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
@@ -284,6 +271,7 @@ If the document is too fragmentary or unreadable to analyze, still provide your 
     return {
       doc_id: docId,
       file_path: filePath,
+      full_text: content,
       analysis: {
         doc_id: docId,
         one_sentence_summary: 'Error during analysis',
@@ -299,8 +287,7 @@ If the document is too fragmentary or unreadable to analyze, still provide your 
   }
 
   // Parse JSON from the result
-  const jsonMatch = result.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const jsonText = jsonMatch ? jsonMatch[1] : result;
+  const jsonText = extractJSON(result);
   let analysis: DocumentAnalysis;
 
   try {
@@ -325,36 +312,19 @@ Instructions:
 - Return ONLY the valid JSON object, no explanations
 - Do NOT modify the content, only fix the syntax`;
 
-    const repairAgent = query({
-      prompt: repairPrompt,
-      options: {
-        model: ANALYSIS_MODEL,
-        maxTokens: 16000,
-        maxTurns: 3,
-        allowedTools: [],
-      }
-    });
-
     let repairedText = '';
     try {
-      for await (const message of repairAgent) {
-        if (message.type === 'result' && message.subtype === 'success') {
-          repairedText = message.result;
-        } else if (message.type === 'assistant') {
-          const textBlocks = message.message.content.filter((c: any) => c.type === 'text');
-          for (const block of textBlocks) {
-            repairedText += block.text;
-          }
-        }
-      }
+      const repairResponse = await query(repairPrompt, {
+        maxTokens: 16000,
+      });
+      repairedText = repairResponse.content;
 
       // Extract JSON from repair response
-      const repairMatch = repairedText.match(/```(?:json)?\s*([\s\S]*?)```/) || repairedText.match(/\{[\s\S]*\}/);
-      if (!repairMatch) {
+      const repairedJsonText = extractJSON(repairedText);
+      if (!repairedJsonText) {
         throw new Error('No JSON found in repair response');
       }
 
-      const repairedJsonText = repairMatch[1] || repairMatch[0];
       analysis = JSON.parse(repairedJsonText.trim());
       analysis.doc_id = docId;
       console.log(`  ✓ JSON successfully repaired for ${docId}`);
@@ -363,6 +333,7 @@ Instructions:
       return {
         doc_id: docId,
         file_path: filePath,
+        full_text: content,
         analysis: {
           doc_id: docId,
           one_sentence_summary: 'Failed to parse analysis',
@@ -529,7 +500,10 @@ async function main() {
   console.log(`\n=== Document Analysis Starting ===\n`);
   console.log(`Data directory: ${dataDir}`);
   console.log(`Max documents: ${maxDocs}`);
-  console.log(`Database: ${dbPath}\n`);
+  console.log(`Database: ${dbPath}`);
+
+  // Print LLM configuration
+  printConfig();
 
   // Initialize database
   const db = initDatabase(dbPath);

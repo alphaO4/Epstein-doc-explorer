@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import fs from 'fs/promises';
+// This script uses a configurable LLM backend for naming tag clusters.
+// Configure via environment variables:
+//   LLM_PROVIDER: 'local' | 'openrouter' | 'openai' | 'anthropic' (default: 'local')
+//   LLM_BASE_URL: API endpoint (default: 'http://localhost:11434/v1' for Ollama)
+//   LLM_MODEL: Model name (default depends on provider)
+//   LLM_API_KEY: API key if required
+import { query, extractJSON, printConfig } from './llm_client.ts';
+import * as fs from 'fs/promises';
 
 interface TagCluster {
   id: number;
@@ -70,17 +76,19 @@ Respond in JSON format as an array:
 ]`;
 
     try {
-      const response = await query(prompt);
+      const response = await query(prompt, {
+        maxTokens: 4096,
+      });
 
       // Extract JSON from response (might be wrapped in markdown code blocks)
-      const jsonMatch = response.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
+      const jsonText = extractJSON(response.content);
+      if (!jsonText) {
         console.error('Failed to parse JSON from response');
-        console.error('Response:', response);
+        console.error('Response:', response.content);
         continue;
       }
 
-      const batchNamings = JSON.parse(jsonMatch[0]) as Omit<ClusterNaming, 'oldName'>[];
+      const batchNamings = JSON.parse(jsonText) as Omit<ClusterNaming, 'oldName'>[];
 
       // Add old names and merge
       for (const naming of batchNamings) {
@@ -110,6 +118,9 @@ Respond in JSON format as an array:
 
 async function main() {
   console.log('📚 Loading cluster data...');
+
+  // Print LLM configuration
+  printConfig();
 
   const clustersJson = await fs.readFile('tag_clusters.json', 'utf-8');
   const clusters = JSON.parse(clustersJson) as TagCluster[];

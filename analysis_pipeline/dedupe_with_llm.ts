@@ -1,4 +1,10 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+// This script uses a configurable LLM backend for entity deduplication.
+// Configure via environment variables:
+//   LLM_PROVIDER: 'local' | 'openrouter' | 'openai' | 'anthropic' (default: 'local')
+//   LLM_BASE_URL: API endpoint (default: 'http://localhost:11434/v1' for Ollama)
+//   LLM_MODEL: Model name (default depends on provider)
+//   LLM_API_KEY: API key if required
+import { query, extractJSON, printConfig } from './llm_client.ts';
 import Database from 'better-sqlite3';
 
 const db = new Database('document_analysis.db');
@@ -138,27 +144,12 @@ Return ONLY valid JSON with this exact structure:
 
 If no merges needed, use empty array: {"merge_groups": [], "do_not_merge": ${JSON.stringify(group.names)}, "reasoning_for_no_merge": "all distinct"}`;
 
-  let responseText = '';
-
-  const agent = query({
-    prompt,
-    options: {
-      model: 'claude-haiku-4-5',
-      maxTokens: 4096,
-      maxTurns: 3,
-      allowedTools: [],
-    }
-  });
-
   try {
-    for await (const message of agent) {
-      if (message.type === 'assistant') {
-        const textBlocks = message.message.content.filter((c: any) => c.type === 'text');
-        for (const block of textBlocks) {
-          responseText += block.text;
-        }
-      }
-    }
+    const response = await query(prompt, {
+      maxTokens: 4096,
+    });
+
+    const responseText = response.content;
 
     if (!responseText) {
       console.error('No response text for group:', group.names.slice(0, 3));
@@ -166,16 +157,7 @@ If no merges needed, use empty array: {"merge_groups": [], "do_not_merge": ${JSO
     }
 
     // Try to extract JSON from markdown code blocks or raw text
-    let jsonText = responseText;
-    const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch) {
-      jsonText = codeBlockMatch[1];
-    } else {
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        jsonText = jsonMatch[0];
-      }
-    }
+    const jsonText = extractJSON(responseText);
 
     if (!jsonText || jsonText.trim() === '') {
       console.error('Could not extract JSON from response for group:', group.names.slice(0, 3));
@@ -209,6 +191,9 @@ function createAliases(decision: LLMMergeDecision): number {
 
 async function main() {
   console.log('=== LLM-Based Entity Deduplication (Non-Destructive) ===\n');
+
+  // Print LLM configuration
+  printConfig();
 
   // Initialize alias table
   initAliasTable();

@@ -1,6 +1,15 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+// Test script for LLM-based entity deduplication
+// Configure via environment variables:
+//   LLM_PROVIDER: 'local' | 'openrouter' | 'openai' | 'anthropic' (default: 'local')
+//   LLM_BASE_URL: API endpoint (default: 'http://localhost:11434/v1' for Ollama)
+//   LLM_MODEL: Model name (default depends on provider)
+//   LLM_API_KEY: API key if required
+import { query, extractJSON, printConfig } from './llm_client.ts';
 
 async function testOneGroup() {
+  // Print LLM configuration
+  printConfig();
+
   const testNames = ['Jeffrey Epstein', 'Jeffrey E.', 'Jeff Epstein', 'J. Epstein'];
 
   const prompt = `Analyze these entity names and determine which should be merged (same person) vs kept separate (different people).
@@ -25,31 +34,15 @@ If no merges needed, use empty array: {"merge_groups": [], "do_not_merge": ${JSO
 
   console.log('=== Testing Single Group ===\n');
   console.log('Names:', testNames);
-  console.log('\nSending prompt to Claude...\n');
-
-  let responseText = '';
-
-  const agent = query({
-    prompt,
-    options: {
-      model: 'claude-haiku-4-5',
-      maxTokens: 4096,
-      maxTurns: 1,
-      allowedTools: [],
-    }
-  });
+  console.log('\nSending prompt to LLM...\n');
 
   try {
     console.log('Collecting response...\n');
-    for await (const message of agent) {
-      console.log('Message type:', message.type);
-      if (message.type === 'assistant') {
-        const textBlocks = message.message.content.filter((c: any) => c.type === 'text');
-        for (const block of textBlocks) {
-          responseText += block.text;
-        }
-      }
-    }
+    const response = await query(prompt, {
+      maxTokens: 4096,
+    });
+
+    const responseText = response.content;
 
     console.log('\n=== Response Text ===');
     console.log(responseText);
@@ -61,20 +54,10 @@ If no merges needed, use empty array: {"merge_groups": [], "do_not_merge": ${JSO
     }
 
     // Try to extract JSON
-    let jsonText = responseText;
-    const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch) {
-      console.log('Found JSON in code block');
-      jsonText = codeBlockMatch[1];
-    } else {
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        console.log('Found JSON in raw text');
-        jsonText = jsonMatch[0];
-      } else {
-        console.log('ERROR: No JSON found in response');
-        return;
-      }
+    const jsonText = extractJSON(responseText);
+    if (!jsonText) {
+      console.log('ERROR: No JSON found in response');
+      return;
     }
 
     console.log('\nExtracted JSON:');

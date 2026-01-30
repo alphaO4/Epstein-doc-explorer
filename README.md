@@ -6,7 +6,7 @@ An intelligent document analysis and network visualization system that processes
 
 ## Project Overview
 
-This project analyzes the Epstein document corpus to extract structured information about actors, actions, locations, and relationships. It uses Claude AI for intelligent extraction and presents findings through an interactive network visualization interface.
+This project analyzes the Epstein document corpus to extract structured information about actors, actions, locations, and relationships. It uses a configurable LLM backend (local or cloud) for intelligent extraction and presents findings through an interactive network visualization interface.
 
 **Live Demo:** [Deployed on Render](https://epstein-doc-explorer-1.onrender.com/)
 
@@ -22,7 +22,7 @@ The project has two main phases:
 
 ### 1. Analysis Pipeline
 **Purpose:** Extract structured data from raw documents using AI
-**Technology:** TypeScript, Claude AI (Anthropic), SQLite
+**Technology:** TypeScript, Configurable LLM Backend (Local/OpenRouter/OpenAI/Anthropic), SQLite
 **Location:** Root directory + `analysis_pipeline/`
 
 ### 2. Visualization Interface
@@ -35,7 +35,7 @@ The project has two main phases:
 ## Key Features
 
 ### Analysis Pipeline Features
-- **AI-Powered Extraction:** Uses Claude to extract entities, relationships, and events from documents
+- **AI-Powered Extraction:** Uses configurable LLM backend (Ollama, LM Studio, OpenRouter, etc.) to extract entities, relationships, and events from documents
 - **Semantic Tagging:** Automatically tags triples with contextual metadata (legal, financial, travel, etc.)
 - **Tag Clustering:** Groups 28,000+ tags into 30 semantic clusters using K-means for better filtering
 - **Entity Deduplication:** Merges duplicate entities using LLM-based similarity detection
@@ -98,11 +98,35 @@ docnetwork/
 **Input:** Extracted JSON documents
 **Output:** SQLite database with entities and relationships
 **Key Features:**
-- Uses Claude to extract RDF-style triples (subject-action-object)
+- Uses configurable LLM backend to extract RDF-style triples (subject-action-object)
 - Extracts temporal information (dates, timestamps)
 - Tags relationships with contextual metadata
 - Handles batch processing with rate limiting
 - Stores document full text for search
+
+**LLM Configuration:**
+Configure the LLM backend via environment variables:
+```bash
+# Local LLM (Ollama, LM Studio, vLLM, llama.cpp - default)
+export LLM_PROVIDER=local
+export LLM_BASE_URL=http://localhost:11434/v1
+export LLM_MODEL=llama3.2
+
+# OpenRouter
+export LLM_PROVIDER=openrouter
+export LLM_API_KEY=your-key
+export LLM_MODEL=meta-llama/llama-3.1-8b-instruct
+
+# OpenAI
+export LLM_PROVIDER=openai
+export LLM_API_KEY=your-key
+export LLM_MODEL=gpt-4o-mini
+
+# Anthropic Claude (legacy)
+export LLM_PROVIDER=anthropic
+export LLM_API_KEY=your-key
+export LLM_MODEL=claude-3-5-haiku-latest
+```
 
 **Database Schema:**
 ```sql
@@ -186,7 +210,7 @@ CREATE TABLE entity_aliases (
 **Output:** `entity_aliases` table mapping variants to canonical names
 **Process:**
 1. Identify potential duplicates using fuzzy matching
-2. Use Claude to determine if entities are the same person
+2. Use LLM to determine if entities are the same person
 3. Create alias mappings (e.g., "Jeff Epstein" → "Jeffrey Epstein")
 4. API server resolves aliases in real-time
 
